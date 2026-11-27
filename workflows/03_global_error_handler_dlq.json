@@ -1,0 +1,75 @@
+{
+  "name": "03_Global_Error_Handler_DLQ",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "err-trigger",
+      "name": "[TRIGGER] Global n8n Error Event",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const err = $input.first().json;\nreturn [{ json: { workflow_id: err.workflow?.id || 'unknown', workflow_name: err.workflow?.name || 'unknown', execution_id: err.execution?.id || 'unknown', execution_url: err.execution?.url || '', failed_node: err.execution?.lastNodeExecuted || 'unknown', error_message: err.execution?.error?.message || 'Unhandled workflow error', captured_at: new Date().toISOString() } }];"
+      },
+      "id": "err-format",
+      "name": "[TRANSFORM] Normalize Error Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OPS_ALERT_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: `[n8n DLQ ALERT] ${$json.workflow_name} failed at ${$json.failed_node}: ${$json.error_message}` }) }}"
+      },
+      "id": "err-alert",
+      "name": "[DLQ] Notify Ops Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "position": [
+        760,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "[TRIGGER] Global n8n Error Event": {
+      "main": [
+        [
+          {
+            "node": "[TRANSFORM] Normalize Error Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[TRANSFORM] Normalize Error Context": {
+      "main": [
+        [
+          {
+            "node": "[DLQ] Notify Ops Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
