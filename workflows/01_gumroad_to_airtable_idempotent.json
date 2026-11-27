@@ -1,0 +1,212 @@
+{
+  "name": "01_Gumroad_to_Airtable_Idempotent_Upsert",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gumroad-sale-ingest",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-trigger-webhook",
+      "name": "[TRIGGER] Gumroad Sale Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst required = ['sale_id', 'email', 'product_id'];\nconst missing = required.filter(k => !body[k] || String(body[k]).trim() === '');\nif (missing.length > 0) {\n  return [{ json: { valid: false, reason: 'Missing required fields: ' + missing.join(', '), raw: body } }];\n}\nconst saleId = String(body.sale_id).trim();\nreturn [{ json: { valid: true, idempotency_key: `gumroad::sale::${saleId}`, sale_id: saleId, email: String(body.email).trim().toLowerCase(), buyer_name: String(body.full_name || '').trim(), product_id: String(body.product_id).trim(), product_name: String(body.product_name || '').trim(), amount_usd: Number((Number(body.price || 0) / 100).toFixed(2)), currency: String(body.currency || 'usd').toUpperCase(), is_refunded: Boolean(body.refunded), sale_timestamp: body.sale_timestamp || new Date().toISOString() } }];"
+      },
+      "id": "node-validate",
+      "name": "[VALIDATE] Schema & Idempotency Key",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node-branch-valid",
+      "name": "[VALIDATE] Payload Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        700,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.AIRTABLE_BASE_ID }}"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.AIRTABLE_SALES_TABLE_ID }}"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "idempotency_key"
+          ],
+          "value": {
+            "idempotency_key": "={{ $json.idempotency_key }}",
+            "sale_id": "={{ $json.sale_id }}",
+            "email": "={{ $json.email }}",
+            "buyer_name": "={{ $json.buyer_name }}",
+            "product_name": "={{ $json.product_name }}",
+            "amount_usd": "={{ $json.amount_usd }}",
+            "currency": "={{ $json.currency }}",
+            "is_refunded": "={{ $json.is_refunded }}",
+            "sale_timestamp": "={{ $json.sale_timestamp }}"
+          }
+        }
+      },
+      "id": "node-airtable-upsert",
+      "name": "[WRITE] Airtable Idempotent Upsert",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput",
+      "position": [
+        960,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\":\"ok\"}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "node-resp-ok",
+      "name": "[RESPONSE] 200 OK Synced",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1220,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.AIRTABLE_BASE_ID }}"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.AIRTABLE_DLQ_TABLE_ID }}"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "workflow": "01_Gumroad_to_Airtable_Idempotent_Upsert",
+            "error_reason": "={{ $json.reason || $json.error?.message || 'Downstream upsert failed after 4 retries' }}",
+            "raw_payload": "={{ JSON.stringify($json) }}",
+            "failed_at": "={{ $now.toISO() }}"
+          }
+        }
+      },
+      "id": "node-dlq-write",
+      "name": "[DLQ] Persist Failed Event",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        1220,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "[TRIGGER] Gumroad Sale Webhook": {
+      "main": [
+        [
+          {
+            "node": "[VALIDATE] Schema & Idempotency Key",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[VALIDATE] Schema & Idempotency Key": {
+      "main": [
+        [
+          {
+            "node": "[VALIDATE] Payload Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[VALIDATE] Payload Valid?": {
+      "main": [
+        [
+          {
+            "node": "[WRITE] Airtable Idempotent Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[DLQ] Persist Failed Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "[WRITE] Airtable Idempotent Upsert": {
+      "main": [
+        [
+          {
+            "node": "[RESPONSE] 200 OK Synced",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "[DLQ] Persist Failed Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "03_Global_Error_Handler_DLQ"
+  }
+}
