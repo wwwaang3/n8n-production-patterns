@@ -1,0 +1,50 @@
+{
+  "name": "02_AI_Lead_Triage_Schema_Guard_Fallback",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "inbound-lead-triage",
+        "options": {}
+      },
+      "id": "lead-trigger",
+      "name": "[TRIGGER] Inbound Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst text = String(item.message || item.raw_llm_output || '');\nlet parsed = null;\ntry {\n  const match = text.match(/\\{[\\s\\S]*\\}/);\n  if (match) parsed = JSON.parse(match[0]);\n} catch (e) { parsed = null; }\nconst allowedTiers = ['HOT', 'WARM', 'COLD'];\nif (parsed && allowedTiers.includes(parsed.tier) && typeof parsed.summary === 'string') {\n  return [{ json: { ...item, tier: parsed.tier, summary: parsed.summary, fallback_used: false } }];\n}\nconst tier = /(urgent|budget|rfq|pilot|quote|enterprise)/i.test(text) ? 'HOT' : 'WARM';\nreturn [{ json: { ...item, tier, summary: text.slice(0, 240), fallback_used: true, fallback_reason: 'LLM schema validation failed; deterministic rule applied' } }];"
+      },
+      "id": "schema-guard",
+      "name": "[AI] Strict JSON Guard + Deterministic Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "[TRIGGER] Inbound Lead Webhook": {
+      "main": [
+        [
+          {
+            "node": "[AI] Strict JSON Guard + Deterministic Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "03_Global_Error_Handler_DLQ"
+  }
+}
